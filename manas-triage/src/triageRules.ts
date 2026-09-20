@@ -3,63 +3,63 @@ import type { VitalsInput, TriageCategory } from './types';
 export function evaluatePhysicalTriage(vitals: VitalsInput): { 
   category: TriageCategory; 
   reason: string; 
-  urgencyScore: number 
+  urgencyScore: number;
 } {
   // Apnea check: immediate fatal arrest
   if (!vitals.isBreathing) {
     return { 
       category: 'RED', 
-      reason: 'Apneic: Immediate airway clearance and rescue ventilation required.',
+      reason: 'RUSH TO HOSPITAL IMMEDIATELY! Patient is not breathing. Clear airway and give mouth-to-mouth rescue breaths right now.',
       urgencyScore: 100 
     };
   }
 
-  const reasons: string[] = [];
+  const plainAlerts: string[] = [];
+  const clinicalNotes: string[] = [];
 
-  // 1. Dynamic Respiratory Score (Curve based on deviation from optimal 16 bpm)
-  // Normal resting rate: 12 - 20 bpm
+  // Parse input safely (handles empty string or zero)
+  const numericRate = vitals.respiratoryRate === '' ? 0 : vitals.respiratoryRate;
   const targetRate = 16;
-  const rr = Math.max(0, Math.min(80, vitals.respiratoryRate));
+  const rr = Math.max(0, Math.min(80, numericRate));
   let respScore: number;
 
   if (rr > 20) {
-    // Scales dynamically: 21 bpm adds ~5 points, 30 bpm adds ~30 points, 50 bpm adds ~48 points
     respScore = Math.min(50, Math.round(Math.pow(rr - targetRate, 1.35) * 1.5));
     if (rr >= 30) {
-      reasons.push(`Severe tachypnea (${rr} bpm)`);
+      plainAlerts.push('Breathing is dangerously fast');
+      clinicalNotes.push(`Severe tachypnea (${rr} bpm)`);
     } else if (rr >= 24) {
-      reasons.push(`Compensatory elevated respiration (${rr} bpm)`);
+      plainAlerts.push('Breathing is faster than normal');
+      clinicalNotes.push(`Compensatory elevated respiration (${rr} bpm)`);
     }
   } else if (rr < 12) {
-    // Depression / Bradypnea: 11 bpm adds ~10 points, 6 bpm adds ~40 points
     respScore = Math.min(50, Math.round(Math.pow(targetRate - rr, 1.4) * 2.2));
     if (rr < 10) {
-      reasons.push(`Severe bradypnea (${rr} bpm)`);
+      plainAlerts.push('Breathing is dangerously slow or gasping');
+      clinicalNotes.push(`Severe bradypnea (${rr} bpm)`);
     }
   } else {
-    // Normal baseline variation between 12 and 20 bpm (gives 2 to 6 points)
     respScore = Math.abs(rr - targetRate) + 2;
   }
 
-  // 2. Hemorrhage Dynamic Impact
-  // Active bleeding adds severe base urgency + scales slightly with respiratory stress
+  // Active Bleeding Check
   let bleedScore = 0;
   if (vitals.severeBleeding) {
     bleedScore = 42 + Math.min(10, Math.round(respScore * 0.2));
-    reasons.push('Active uncontrolled arterial hemorrhage');
+    plainAlerts.push('Severe heavy bleeding (Press cloth tightly on wound immediately)');
+    clinicalNotes.push('Active uncontrolled arterial hemorrhage');
   }
 
-  // 3. Circulatory Perfusion Shock
+  // Pulse Check
   let pulseScore = 0;
   if (!vitals.radialPulsePresent) {
     pulseScore = 28 + Math.min(8, Math.round(respScore * 0.15));
-    reasons.push('Absent radial pulse (circulatory shock)');
+    plainAlerts.push('Wrist pulse cannot be felt (Body going into shock)');
+    clinicalNotes.push('Absent radial pulse / circulatory shock');
   }
 
-  // Base human baseline score is 4
   const rawScore = 4 + respScore + bleedScore + pulseScore;
 
-  // Strict life-threat check: Any true red flag guarantees a minimum score of 72
   const isLifeThreat = 
     vitals.severeBleeding || 
     rr >= 30 || 
@@ -73,19 +73,27 @@ export function evaluatePhysicalTriage(vitals: VitalsInput): {
 
   const finalScore = Math.max(1, Math.min(99, calculatedScore));
 
-  // Triage category mapping based on clinical status
   let category: TriageCategory;
+  let actionMessage: string;
+
   if (isLifeThreat || finalScore >= 70) {
     category = 'RED';
+    actionMessage = 'CRITICAL DANGER: Take to nearest hospital or call ambulance immediately.';
   } else if (finalScore >= 35 || (rr >= 24 && rr <= 29)) {
     category = 'YELLOW';
+    actionMessage = 'URGENT: Needs to be seen by a doctor today. Keep patient calm and resting.';
   } else {
     category = 'GREEN';
+    actionMessage = 'STABLE: No immediate life threat. Give basic first aid, keep hydrated, and monitor.';
   }
+
+  const reasonsSummary = plainAlerts.length > 0 
+    ? `${actionMessage} Observed signs: ${plainAlerts.join('; ')}. [Medical notes: ${clinicalNotes.join('; ')}]`
+    : `${actionMessage} Pulse and breathing are at safe normal levels.`;
 
   return {
     category,
-    reason: reasons.length > 0 ? reasons.join('; ') + '.' : 'Normal physiological parameters. Stable baseline.',
+    reason: reasonsSummary,
     urgencyScore: finalScore
   };
 }

@@ -2,7 +2,7 @@ export type TriageCategory = 'RED' | 'YELLOW' | 'GREEN' | 'BLACK';
 
 export interface VitalsInput {
   isBreathing: boolean;
-  respiratoryRate: number;
+  respiratoryRate: number | '';
   radialPulsePresent: boolean;
   mentalStatusFollowsCommands: boolean;
   severeBleeding: boolean;
