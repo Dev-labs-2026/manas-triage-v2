@@ -4,7 +4,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { db } from './db';
 import type { VitalsInput, TriageCategory, TriageRecord } from './types';
-import { evaluatePhysicalTriage, detectMentalRedFlags } from './triageRules';
+import { evaluatePhysicalTriage, detectMentalRedFlags, evaluateLocalMentalTriage } from './triageRules';
 import GuidedTour, { type TourStep } from './GuidedTour';
 import {
   ShieldAlert,
@@ -75,6 +75,9 @@ export default function App() {
   });
 
   const [mentalText, setMentalText] = useState('');
+  const mentalTextRef = useRef('');
+  mentalTextRef.current = mentalText;
+
   const [analyzing, setAnalyzing] = useState(false);
   const [lastResult, setLastResult] = useState<{
     category: TriageCategory;
@@ -83,6 +86,57 @@ export default function App() {
   } | null>(null);
 
   const workerRef = useRef<Worker | null>(null);
+
+  const processMentalResult = async (text: string, isDistressed: boolean, confidence: number) => {
+    const lower = text.toLowerCase();
+    const highCrisisWords = [
+      "can't breathe",
+      'cant breathe',
+      'panic',
+      'terrified',
+      'trapped',
+      'crushed',
+      'uncontrollably',
+      'overwhelmed',
+    ];
+    const hasHighCrisis = highCrisisWords.some((w) => lower.includes(w));
+
+    let calculatedScore = 15;
+    if (isDistressed) {
+      if (hasHighCrisis) {
+        calculatedScore = Math.min(98, 75 + Math.round(confidence * 0.23));
+      } else {
+        calculatedScore = Math.min(65, 35 + Math.round(confidence * 0.3));
+      }
+    }
+
+    const category: TriageCategory =
+      calculatedScore >= 80
+        ? 'RED'
+        : calculatedScore >= 40
+        ? 'YELLOW'
+        : 'GREEN';
+
+    const action =
+      category === 'RED'
+        ? `EMERGENCY (Danger Level: ${calculatedScore}%): Person is in severe emotional shock or panic. Stay with them, do not leave them alone, and call emergency help immediately.`
+        : category === 'YELLOW'
+        ? `URGENT CARE (Stress Level: ${calculatedScore}%): Person is very anxious or overwhelmed. Sit them down in a quiet place, practice slow deep breathing, and have someone stay with them.`
+        : `MILD / STABLE (Stress Level: ${calculatedScore}%): Person is safe and calm. Normal support and listening are sufficient.`;
+
+    setLastResult({ category, details: action, urgencyScore: calculatedScore });
+
+    await db.triageRecords.add({
+      timestamp: new Date().toLocaleTimeString(),
+      patientType: 'MENTAL',
+      reportedSymptoms: text,
+      severity: category,
+      urgencyScore: calculatedScore,
+      summaryAction: action,
+    });
+    loadRecords();
+    setAnalyzing(false);
+  };
 
   useEffect(() => {
     workerRef.current = new Worker(
@@ -98,59 +152,11 @@ export default function App() {
         setAiReady(true);
       }
       if (data.status === 'COMPLETE') {
-        setAnalyzing(false);
         const { isDistressed, confidence } = data.result;
-
-        const lower = mentalText.toLowerCase();
-        const highCrisisWords = [
-          "can't breathe",
-          'cant breathe',
-          'panic',
-          'terrified',
-          'trapped',
-          'crushed',
-          'uncontrollably',
-          'overwhelmed',
-        ];
-        const hasHighCrisis = highCrisisWords.some((w) => lower.includes(w));
-
-        let calculatedScore = 15;
-        if (isDistressed) {
-          if (hasHighCrisis) {
-            calculatedScore = Math.min(98, 75 + Math.round(confidence * 0.23));
-          } else {
-            calculatedScore = Math.min(65, 35 + Math.round(confidence * 0.3));
-          }
-        }
-
-        const category: TriageCategory =
-          calculatedScore >= 80
-            ? 'RED'
-            : calculatedScore >= 40
-            ? 'YELLOW'
-            : 'GREEN';
-
-        const action =
-          category === 'RED'
-            ? `EMERGENCY (Danger Level: ${calculatedScore}%): Person is in severe emotional shock or panic. Stay with them, do not leave them alone, and call emergency help immediately.`
-            : category === 'YELLOW'
-            ? `URGENT CARE (Stress Level: ${calculatedScore}%): Person is very anxious or overwhelmed. Sit them down in a quiet place, practice slow deep breathing, and have someone stay with them.`
-            : `MILD / STABLE (Stress Level: ${calculatedScore}%): Person is safe and calm. Normal support and listening are sufficient.`;
-
-        setLastResult({ category, details: action, urgencyScore: calculatedScore });
-
-        await db.triageRecords.add({
-          timestamp: new Date().toLocaleTimeString(),
-          patientType: 'MENTAL',
-          reportedSymptoms: mentalText,
-          severity: category,
-          urgencyScore: calculatedScore,
-          summaryAction: action,
-        });
-        loadRecords();
+        await processMentalResult(mentalTextRef.current, isDistressed, confidence);
       }
       if (data.status === 'ERROR') {
-        setAiStatus(`AI Offline`);
+        setAiStatus('AI Offline');
         setAnalyzing(false);
       }
     };
@@ -161,7 +167,7 @@ export default function App() {
     return () => {
       workerRef.current?.terminate();
     };
-  }, [mentalText]);
+  }, []);
 
   async function loadRecords() {
     const list = await db.triageRecords.reverse().limit(10).toArray();
@@ -237,7 +243,13 @@ export default function App() {
     }
 
     setAnalyzing(true);
-    workerRef.current?.postMessage({ type: 'CLASSIFY', text: mentalText });
+
+    if (aiReady && workerRef.current) {
+      workerRef.current.postMessage({ type: 'CLASSIFY', text: mentalText });
+    } else {
+      const localResult = evaluateLocalMentalTriage(mentalText);
+      await processMentalResult(mentalText, localResult.isDistressed, localResult.confidence);
+    }
   };
 
   const handleExportPDF = (skipDetails: boolean = false) => {

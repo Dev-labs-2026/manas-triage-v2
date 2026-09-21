@@ -108,3 +108,31 @@ export function detectMentalRedFlags(text: string): boolean {
   ];
   return criticalPhrases.some(phrase => normalized.includes(phrase));
 }
+export function evaluateLocalMentalTriage(text: string): {
+  isDistressed: boolean;
+  confidence: number;
+  detectedEmotion: string;
+} {
+  const lower = text.toLowerCase();
+  
+  const fearWords = ['terrified', 'panic', 'scared', 'afraid', 'fear', 'pounding', "can't breathe", 'shaking', 'trembling'];
+  const sadnessWords = ['depressed', 'hopeless', 'crying', 'sad', 'empty', 'lonely', 'exhausted', 'grief', 'worthless'];
+  const angerWords = ['furious', 'rage', 'angry', 'hate', 'frustrated', 'screaming'];
+
+  if (fearWords.some(w => lower.includes(w))) {
+    return { isDistressed: true, confidence: 88, detectedEmotion: 'fear' };
+  }
+  if (sadnessWords.some(w => lower.includes(w))) {
+    return { isDistressed: true, confidence: 82, detectedEmotion: 'sadness' };
+  }
+  if (angerWords.some(w => lower.includes(w))) {
+    return { isDistressed: true, confidence: 75, detectedEmotion: 'anger' };
+  }
+
+  const stressWords = ['stress', 'stressed', 'anxious', 'pain', 'pressure', 'worried', 'nervous', 'trouble'];
+  if (stressWords.some(w => lower.includes(w))) {
+    return { isDistressed: true, confidence: 70, detectedEmotion: 'anxiety' };
+  }
+
+  return { isDistressed: false, confidence: 90, detectedEmotion: 'neutral' };
+}
